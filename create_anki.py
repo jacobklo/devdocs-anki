@@ -1,7 +1,11 @@
-import hashlib, csv, html
+import hashlib, csv, html, re
 from typing import List
+from pathlib import Path
 
 import genanki
+import bs4
+
+from convert_devdocs_json_to_cards import get_node_recursive
 
 
 DefaultFrontTemplate = '''<script>
@@ -18,11 +22,11 @@ var reactKeywords = ['import', 'export', 'from', 'return', 'class', 'extends', '
 
 function obfuscatePythonCode(pre_tag) {
   let keywordSet = new Set(pythonKeywords + reactKeywords + cppKeywords + jsKeywords);
-  let assignmentRegex = /(.+?)\s*((==|!=|<=|>=|<|>|=)\s*[^#\n]+)/g;
+  let assignmentRegex = /(.+?)\s*((==|!=|<=|>=|<|>|=)\s*[^#\\n]+)/g;
 
   let python_code = pre_tag.textContent;
   let result_code = python_code
-    .split("\n")
+    .split("\\n")
     .map((line) => {
       if ( line.trim().startsWith("//") ||
         line.trim().startsWith("/*") ||
@@ -45,7 +49,7 @@ function obfuscatePythonCode(pre_tag) {
         }
       );
     })
-    .join("\n");
+    .join("\\n");
     pre_tag.innerHTML = result_code; 
 }
 
@@ -53,14 +57,14 @@ function obfuscatePythonCode(pre_tag) {
 
 function hideSomeText(node) {
   if (!node || !node.childNodes || node.tagName.toLowerCase() === 'pre') return;
-		console.log(node.tagName);
+
   node.childNodes.forEach(child => {
       if (child.nodeType === Node.ELEMENT_NODE) {
           hideSomeText(child);
       }
       if (child.nodeType === Node.TEXT_NODE) {
           const parentTag = child.parentNode.tagName.toLowerCase();
-          if (['b', 'i', 'u',  's', 'em', 'strong', 'code'].includes(parentTag)) {
+          if (['b', 'i', 'u', 's', 'em', 'strong', 'code'].includes(parentTag)) {
               child.nodeValue = child.nodeValue.replace(/./g, '_');
           }
       }
@@ -145,7 +149,6 @@ setTimeout(() => {
   <div class="question-clone" style="display:none">
 		{{Front}}
     {{Back}}
-
   </div>
 </div>
 
@@ -191,20 +194,39 @@ def create_anki_package(name: str, model: genanki.Model, notes: List[genanki.Not
     anki_output.write_to_file(f'{name}.apkg')
 
 
+def gen_anki_notes(model: genanki.Model):
+  devdocs_json_dir = Path('output_htmls')
+  result_notes : List[genanki.Note]= []
+
+  for d in devdocs_json_dir.glob('*.html'):
+    with open(d, 'r', encoding='utf-8') as f:
+  
+      soup = bs4.BeautifulSoup(f, 'html.parser')
+      result_node = get_node_recursive(soup, [], [])
+      
+      for r in result_node:
+        header = f'{d.stem}\u3009\n<br>{r[0]}<hr>'
+        tags = [re.sub(r'\W', '_', t) for t in header.split('\u3009\n<br>')]
+        content = '<br>\n'.join([str(t) for t in r[1]])
+        new_note = genanki.Note(model=model, fields=[html.unescape(header + content), ''], tags=tags)
+        result_notes.append(new_note)
+
+  return result_notes
+
 
 
 if __name__ == "__main__":
-    name = 'PythonDocs'
-    hash_object = hashlib.sha1(name.encode('utf-8'))
-    hex_dig = int(hash_object.hexdigest(), 16) % (10 ** 10)
-    front_html = DefaultFrontTemplate
-    back_html = DefaultBackTemplate
+  name = 'ReactDocs'
+  hash_object = hashlib.sha1(name.encode('utf-8'))
+  hex_dig = int(hash_object.hexdigest(), 16) % (10 ** 10)
+  front_html = DefaultFrontTemplate
+  back_html = DefaultBackTemplate
 
-    templates = [{
-      'name': f'{name}Basic',
-      'qfmt': front_html,
-      'afmt': back_html,
-    }]
-    model = genanki.Model(model_id=hex_dig, model_type=genanki.Model.FRONT_BACK, name=name, fields=[{'name': 'Front'},{'name': 'Back'}], templates=templates, css=DefaultStyle)
-    # notes = csv_to_notes(['output_flashcards_with_chatgpt\stdtypes.csv'], model=model)
-    create_anki_package(name, model, notes)
+  templates = [{
+    'name': f'{name}Basic',
+    'qfmt': front_html,
+    'afmt': back_html,
+  }]
+  model = genanki.Model(model_id=hex_dig, model_type=genanki.Model.FRONT_BACK, name=name, fields=[{'name': 'Front'},{'name': 'Back'}], templates=templates, css=DefaultStyle)
+  notes = gen_anki_notes(model)
+  create_anki_package(name, model, notes)
